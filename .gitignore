@@ -13,6 +13,7 @@ build/
 .env
 .env.*
 !.env.example
+.agent_memory.md
 
 # OS & Editors
 .DS_Store
