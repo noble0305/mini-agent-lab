@@ -2,13 +2,13 @@
 
 不依赖重型 Agent 框架，从零手写一系列**最小可运行（Minimal Viable Example）**的 AI Agent 工程实验。
 
-聚焦真正决定 Agent 生产可用性的底层工程问题：**ReAct 控制循环、工具安全围栏、强弱模型路由降本、上下文预算压缩、跨会话持久化记忆与离线回归测试**。每个实验模块彼此组合复用、代码克制可读，且配套零 API 消耗的离线单元测试。
+聚焦真正决定 Agent 生产可用性的底层工程问题：**ReAct 控制循环、工具安全围栏、强弱模型路由降本、上下文预算压缩、跨会话持久化记忆与离线回归评测**。四个实验模块层层组合复用、代码克制可读，且全部自带零 API 消耗的离线单元测试。
 
 ---
 
 ## 一、整体运行架构
 
-整个项目采用**分层组合架构**：`S01` 是最底层的执行内核与安全工具注册表，`S02` 直接复用 `S01` 的循环作为子任务执行器，`S03` 在 `S01` 工具体系上叠加预算守卫、滚动压缩与纯文本长期记忆。
+整个项目采用**分层组合架构**：`S01` 是最底层的执行内核与安全工具注册表，`S02` 复用 `S01` 的循环作为便宜模型子任务执行器，`S03` 在 `S01` 工具体系上叠加预算守卫、滚动压缩与纯文本长期记忆，`S04` 驱动被测 Agent 跑 Golden Dataset 回归评测并支持 Baseline 差异拦截。
 
 ```mermaid
 flowchart TB
@@ -16,11 +16,13 @@ flowchart TB
         M1["s01_react_loop.main"]
         M2["s02_planner_executor.main"]
         M3["s03_context_memory.main"]
+        M4["s04_evals.main (--mock / --judge / --baseline)"]
     end
 
-    subgraph Orchestration["2. 编排与上下文治理层"]
+    subgraph Orchestration["2. 编排、治理与评测层"]
         S2["S02 双模型路由 (router.py): Planner 拆解 AC -> Verifier 验收返工 -> Token 分账"]
         S3["S03 会话记忆与压缩 (memory_agent.py): Token 预算守卫 + 安全切片摘要 + 跨会话记忆注入"]
+        S4["S04 离线回归评测 (evaluator.py): Golden Dataset + 确定性规则 + 可选 Judge + Baseline Diff"]
     end
 
     subgraph Core["3. 核心执行内核层 (S01)"]
@@ -37,12 +39,15 @@ flowchart TB
     M1 --> LOOP
     M2 --> S2
     M3 --> S3
+    M4 --> S4
 
     S2 -->|"每个子任务下放给便宜模型执行"| LOOP
     S2 -->|"Planner 拆解 & Verifier 验收"| LLM
     S3 -->|"挂载记忆工具 & 分发调用"| REG
     S3 -->|"多轮推理 & 滚动压缩"| LLM
     S3 -->|"启动加载 & 落盘持久化"| MEM
+    S4 -->|"批量驱动被测 Agent 回归"| LOOP
+    S4 -->|"可选 LLM-as-a-Judge 评分"| LLM
 
     LOOP --> REG
     LOOP --> LLM
@@ -52,7 +57,7 @@ flowchart TB
 
 ---
 
-## 二、目录结构与演进路线
+## 二、目录结构与实验总览
 
 ```text
 mini-agent-lab/
@@ -66,10 +71,15 @@ mini-agent-lab/
 ├── s03_context_memory/           # [S03] 上下文自动压缩 + 纯 Markdown 跨会话记忆
 │   ├── memory_agent.py           # FileMemory + 安全边界切片 + compact_history + MemorySession
 │   └── main.py                   # 支持多轮交互与重启验证的 CLI 入口
+├── s04_evals/                    # [S04] 离线 Golden Dataset 回归评测体系
+│   ├── dataset.json              # 5 条基准样本（计算/列表/多工具/沙箱防御/禁调工具）
+│   ├── evaluator.py              # 确定性指标 + 可选 LLM-as-a-Judge + Baseline Regression Diff
+│   └── main.py                   # 支持 --mock 零费用体验、--save 存档、--baseline 回归拦截
 ├── tests/                        # 零 API 费用的离线单元测试（FakeClient 依赖注入）
 │   ├── test_react_loop.py
 │   ├── test_planner_executor.py
-│   └── test_context_memory.py
+│   ├── test_context_memory.py
+│   └── test_evals.py
 ├── .env.example                  # 模型与路由配置模板
 └── pyproject.toml                # uv 依赖管理（仅 openai + python-dotenv）
 ```
@@ -79,7 +89,7 @@ mini-agent-lab/
 | **S01** | `s01_react_loop/` | 脱离重框架手写最小 ReAct 闭环、工具异常自修复、沙箱越权防护、步数熔断 | ✅ 已完成 |
 | **S02** | `s02_planner_executor/` | 强模型只做拆解与验收、便宜模型承担高频工具调用，量化 Token 卸载降本比例 | ✅ 已完成 |
 | **S03** | `s03_context_memory/` | 长对话超预算自动滚动摘要（不拆散 `tool_calls/tool` 对）+ 跨会话 Markdown 长期记忆 | ✅ 已完成 |
-| **S04** | `s04_evals/` | 离线 Golden Dataset 回归评测（工具准确率 / 任务完成率 / 成本波动对比） | 🚧 计划中 |
+| **S04** | `s04_evals/` | 离线 Golden Dataset 回归评测（工具准确率 / 完成率 / 可选 Judge / Baseline 回归拦截） | ✅ 已完成 |
 
 ---
 
@@ -181,6 +191,33 @@ flowchart TD
 
 ---
 
+### 4. S04 · 离线 Golden Dataset 回归评测运行过程
+
+把改 Prompt、换模型、改工具描述从“体感变好了”变成**可复现、可拦截 Regression 的工程门禁**。
+
+```mermaid
+flowchart TD
+    DS["加载 Golden Dataset (dataset.json)"] --> RUN["逐条驱动 S01 run_agent 执行"]
+    RUN --> DET1["确定性工具校验: 必调 expected_tools / 禁调 forbidden_tools / 无未知工具"]
+    RUN --> DET2["确定性结果校验: stopped_reason=completed + 关键词命中"]
+    DET1 --> OPT{"是否开启 --judge ?"}
+    DET2 --> OPT
+    OPT -- "是" --> JDG["LLM-as-a-Judge 按 rubric 打 1~5 分 (>=4 通过)"]
+    OPT -- "否" --> AGG["聚合 EvalReport: Pass Rate / Tool Acc / Avg Steps / Tokens / Latency"]
+    JDG --> AGG
+    AGG --> SAVE{"指定 --save ?"}
+    SAVE -- "是" --> JSON["落盘 JSON 报告 (作为下次 Baseline)"]
+    SAVE -- "否" --> DIFF
+    JSON --> DIFF{"指定 --baseline ?"}
+    DIFF -- "否" --> OUT["终端输出汇总报表"]
+    DIFF -- "是" --> CMP["compare_reports: 计算指标 Delta + 识别 Regressions / Improvements"]
+    CMP --> GATE{"存在 Regressions ?"}
+    GATE -- "是" --> FAIL["stderr 告警并 exit(2)，可直接阻断 CI 合并"]
+    GATE -- "否" --> PASS["通过门禁，exit(0)"]
+```
+
+---
+
 ## 四、关键工程取舍与避坑笔记
 
 1. **为什么工具异常一律转成字符串回传，而不是直接 `raise`？**
@@ -189,8 +226,10 @@ flowchart TD
    OpenAI 协议要求每条 `role="tool"` 消息前面必须紧跟包含对应 `tool_call_id` 的 `assistant(tool_calls)` 消息。如果按固定条数硬切（如直接 `history[-4:]`），一旦切口落在 `tool` 消息上，下一次请求必然触发 **HTTP 400 Invalid messages**。向前扫描对齐到非 `tool` 边界是上线前必须补上的防线。
 3. **为什么跨会话记忆先用纯 Markdown（`.agent_memory.md`），而不是一上来上向量库？**
    对于个人助手和中小规模项目状态，纯文本文件零基础设施依赖、人类可以直接打开审校纠错、Git 可追踪变更，且无 RAG 切块丢上下文的问题；只有当文档量级上千时才值得叠加检索引擎。
-4. **为什么所有核心函数都通过参数注入 `client`？**
-   把 `OpenAI` 客户端作为依赖传入，不写死在函数内部，离线单元测试只需传入极简 `FakeClient` 就能在 **0.02 秒内**确定性回归所有异常分支（非法 JSON、路径穿越、返工重试、压缩降级），不依赖网络也不烧 API 费用。
+4. **为什么 S04 默认先跑确定性规则，LLM-as-a-Judge 设为可选？**
+   工具选错、越权防御、关键数值正确性都可以用确定性规则以 0 成本、100% 可复现方式校验；LLM-as-a-Judge 本身有随机性和成本，适合放在确定性门禁之后评估开放式回答质量。
+5. **为什么所有核心函数都通过参数注入 `client`？**
+   把 `OpenAI` 客户端作为依赖传入，不写死在函数内部，离线单元测试只需传入极简 `FakeClient` 就能在 **0.03 秒内**确定性回归所有异常分支，不依赖网络也不烧 API 费用。
 
 ---
 
@@ -208,12 +247,23 @@ uv sync
 uv run pytest -v
 ```
 
-当前覆盖 10 个核心用例：
+当前覆盖 **13 个核心用例**：
 - `tests/test_react_loop.py`：多步 Tool Calling、未知工具/非法 JSON/目录穿越拦截回传、最大步数熔断
 - `tests/test_planner_executor.py`：双模型拆分与 Token 分账统计、验收不通过触发定向返工、重试止损与非法 Plan 降级
 - `tests/test_context_memory.py`：跨会话 Markdown 持久化记忆继承、超预算自动滚动压缩、`tool_calls/tool` 安全切分边界、摘要失败降级兜底
+- `tests/test_evals.py`：工具选择准确率与违规拦截、LLM-as-a-Judge 打分与超时降级、Baseline 回归对比与数据集校验
 
-### 3. 接入真实模型运行
+### 3. 零费用体验 S04 评测与回归对比（`--mock`）
+
+```bash
+# 保存一份基线报告
+uv run python -m s04_evals.main --mock --save eval_reports/base.json
+
+# 与基线对比（出现 Regression 时自动返回退出码 2）
+uv run python -m s04_evals.main --mock --baseline eval_reports/base.json
+```
+
+### 4. 接入真实模型运行
 
 复制配置模板并填入任意 OpenAI 兼容接口（DeepSeek / OpenAI / Gemini 兼容端点 / 本地代理均可）：
 
@@ -221,7 +271,7 @@ uv run pytest -v
 cp .env.example .env
 ```
 
-按需运行对应实验：
+按需运行各实验：
 
 ```bash
 # S01：单模型最小 ReAct Loop
@@ -232,6 +282,9 @@ uv run python -m s02_planner_executor.main "列出目录文件，读 README.md �
 
 # S03：多轮交互 + 自动压缩 + 跨会话持久化记忆（试着告诉它你的偏好，exit 后重启再问它）
 uv run python -m s03_context_memory.main
+
+# S04：用真实模型跑 Golden Dataset 回归评测（可选加 --judge 开启裁判评分）
+uv run python -m s04_evals.main --save eval_reports/latest.json
 ```
 
 ---
