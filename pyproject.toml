@@ -1,0 +1,19 @@
+[project]
+name = "mini-agent-lab"
+version = "0.1.0"
+description = "Minimal, runnable AI Agent engineering experiments built from scratch without heavy frameworks."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.60.0",
+    "python-dotenv>=1.0.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
