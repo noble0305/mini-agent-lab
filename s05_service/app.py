@@ -96,8 +96,9 @@ class AgentHTTPRequestHandler(BaseHTTPRequestHandler):
             status, body = 200, self.app.health()
         else:
             status, body = 404, {"error": "not_found", "request_id": request_id}
-        self._send_json(status, body)
+        # 先落日志再回包：客户端收到响应时日志已持久化，便于测试与排障。
         self._log_request(request_id, "GET", path, status, started)
+        self._send_json(status, body)
 
     def do_POST(self) -> None:
         started = time.monotonic()
@@ -106,29 +107,27 @@ class AgentHTTPRequestHandler(BaseHTTPRequestHandler):
         if path != "/chat":
             # 未读取请求体，复用连接会错位，显式关闭。
             self.close_connection = True
-            self._send_json(404, {"error": "not_found", "request_id": request_id})
             self._log_request(request_id, "POST", path, 404, started)
+            self._send_json(404, {"error": "not_found", "request_id": request_id})
             return
 
         status, payload_or_error = self._read_json_body(request_id)
         if status != 200:
-            self._send_json(status, payload_or_error)
             self._log_request(request_id, "POST", path, status, started, error=payload_or_error.get("error"))
+            self._send_json(status, payload_or_error)
             return
 
         status, body = self.app.chat(payload_or_error, request_id)
-        self._send_json(status, body)
         self._log_request(
             request_id,
             "POST",
             path,
             status,
             started,
-            prompt=str(payload_or_error.get("message") or payload_or_error.get("prompt") or "")
-            if isinstance(payload_or_error, dict)
-            else "",
+            prompt=str(payload_or_error.get("message") or payload_or_error.get("prompt") or ""),
             body=body,
         )
+        self._send_json(status, body)
 
     def _read_json_body(self, request_id: str) -> tuple[int, Any]:
         raw_length = self.headers.get("Content-Length")
