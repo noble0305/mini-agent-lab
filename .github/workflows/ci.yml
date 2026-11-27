@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Run offline tests
+        run: uv run pytest -q
+      - name: Service smoke in mock mode
+        run: |
+          MOCK_LLM=1 PORT=8765 LOG_DIR=ci-logs uv run python -m s05_service.main &
+          server_pid=$!
+          trap 'kill $server_pid 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8765/health; then break; fi
+            sleep 0.5
+          done
+          curl -fsS -X POST http://127.0.0.1:8765/chat \
+            -H 'Content-Type: application/json' \
+            -d '{"message":"计算 365 * 24"}' | tee /tmp/chat.json
+          grep -q 8760 /tmp/chat.json
+          test -s ci-logs/requests.jsonl
+      - name: Validate compose file
+        run: docker compose -f deploy/docker-compose.yml config -q
