@@ -15,6 +15,7 @@ build/
 !.env.example
 .agent_memory.md
 eval_reports/
+logs/
 
 # OS & Editors
 .DS_Store

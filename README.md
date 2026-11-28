@@ -75,11 +75,19 @@ mini-agent-lab/
 │   ├── dataset.json              # 5 条基准样本（计算/列表/多工具/沙箱防御/禁调工具）
 │   ├── evaluator.py              # 确定性指标 + 可选 LLM-as-a-Judge + Baseline Regression Diff
 │   └── main.py                   # 支持 --mock 零费用体验、--save 存档、--baseline 回归拦截
+├── s05_service/                  # [S05] 最小 HTTP 服务（标准库，可部署到远程主机）
+│   ├── app.py                    # /health + /chat 路由、JSONL 请求日志、错误边界
+│   ├── runtime.py                # 复用 S01 run_agent / ToolRegistry，mock 与真实模型切换
+│   ├── mock_llm.py               # 无密钥时的确定性桩客户端（仍走真实 ReAct 循环）
+│   └── main.py                   # `python -m s05_service.main` 入口
+├── deploy/                       # Dockerfile + docker-compose.yml + 远程冒烟脚本 + 部署说明
 ├── tests/                        # 零 API 费用的离线单元测试（FakeClient 依赖注入）
 │   ├── test_react_loop.py
 │   ├── test_planner_executor.py
 │   ├── test_context_memory.py
-│   └── test_evals.py
+│   ├── test_evals.py
+│   └── test_service.py
+├── Makefile                      # make test / deploy / smoke / logs / down
 ├── .env.example                  # 模型与路由配置模板
 └── pyproject.toml                # uv 依赖管理（仅 openai + python-dotenv）
 ```
@@ -90,6 +98,7 @@ mini-agent-lab/
 | **S02** | `s02_planner_executor/` | 强模型只做拆解与验收、便宜模型承担高频工具调用，量化 Token 卸载降本比例 | ✅ 已完成 |
 | **S03** | `s03_context_memory/` | 长对话超预算自动滚动摘要（不拆散 `tool_calls/tool` 对）+ 跨会话 Markdown 长期记忆 | ✅ 已完成 |
 | **S04** | `s04_evals/` | 离线 Golden Dataset 回归评测（工具准确率 / 完成率 / 可选 Judge / Baseline 回归拦截） | ✅ 已完成 |
+| **S05** | `s05_service/` | 标准库 HTTP 服务封装 S01 内核，无 key 自动 mock，Docker 部署到 oracle-1（内存 300MB 上限） | ✅ 已完成 |
 
 ---
 
@@ -247,11 +256,12 @@ uv sync
 uv run pytest -v
 ```
 
-当前覆盖 **13 个核心用例**：
+当前覆盖 **19 个核心用例**：
 - `tests/test_react_loop.py`：多步 Tool Calling、未知工具/非法 JSON/目录穿越拦截回传、最大步数熔断
 - `tests/test_planner_executor.py`：双模型拆分与 Token 分账统计、验收不通过触发定向返工、重试止损与非法 Plan 降级
 - `tests/test_context_memory.py`：跨会话 Markdown 持久化记忆继承、超预算自动滚动压缩、`tool_calls/tool` 安全切分边界、摘要失败降级兜底
 - `tests/test_evals.py`：工具选择准确率与违规拦截、LLM-as-a-Judge 打分与超时降级、Baseline 回归对比与数据集校验
+- `tests/test_service.py`：真实启动 HTTP 服务验证 `/health`、`/chat` 走通 S01 ReAct 工具链、请求校验、JSONL 日志与无 key 自动 mock
 
 ### 3. 零费用体验 S04 评测与回归对比（`--mock`）
 
@@ -285,6 +295,28 @@ uv run python -m s03_context_memory.main
 
 # S04：用真实模型跑 Golden Dataset 回归评测（可选加 --judge 开启裁判评分）
 uv run python -m s04_evals.main --save eval_reports/latest.json
+```
+
+---
+
+## 六、部署为远程 Agent 服务（S05）
+
+`make deploy` 会把代码 rsync 到 `oracle-1:~/mini-agent-lab`，在远端 `docker compose build && up -d`，然后自动执行冒烟。
+
+```bash
+make test        # 19 个离线用例（含真实启动 HTTP 服务的 6 个 S05 用例）
+make deploy      # 部署到 oracle-1（默认 mock 模式，无需任何 key）
+make smoke       # 远程回环 curl：/health 200 + /chat 返回 8760
+make logs        # 查看 /app/logs/requests.jsonl 最近 20 条
+make down        # 停止容器
+```
+
+服务只绑定 `oracle-1` 的 `127.0.0.1:8080`，不改安全组/防火墙；需要本机访问时用 `ssh -L 8080:127.0.0.1:8080 oracle-1`。容器内存硬上限 300MB，请求日志先以 JSONL 落命名卷。真实模型配置与更多细节见 [`deploy/README.md`](./deploy/README.md)。
+
+```bash
+# 部署后的实际验证（在 oracle-1 上执行）
+curl -s http://127.0.0.1:8080/health
+curl -s -X POST http://127.0.0.1:8080/chat -H 'Content-Type: application/json' -d '{"message":"计算 365 * 24"}'
 ```
 
 ---

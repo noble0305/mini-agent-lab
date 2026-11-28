@@ -1,0 +1,50 @@
+name: mini-agent-lab
+
+services:
+  agent-lab:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: mini-agent-lab:0.1.0
+    container_name: mini-agent-lab
+    restart: unless-stopped
+    ports:
+      # 只绑定回环地址：不改安全组/防火墙，外部访问走 ssh 或 ssh -L 隧道。
+      - "127.0.0.1:${AGENT_PORT:-8080}:8080"
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8080"
+      MOCK_LLM: "${MOCK_LLM:-1}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-deepseek-chat}"
+      MAX_STEPS: "${MAX_STEPS:-6}"
+      LOG_DIR: /app/logs
+      WORKSPACE: /app/workspace
+    volumes:
+      # 命名卷由镜像内 /app/logs 初始化，保持 app 用户 (uid 10001) 可写。
+      - agent-logs:/app/logs
+    # oracle-1 可用内存约 540MiB，容器硬上限 300MB（含 swap 上限）。
+    mem_limit: 300m
+    memswap_limit: 300m
+    cpus: 1.0
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"
+      interval: 30s
+      timeout: 4s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  agent-logs:
+    name: mini-agent-lab-logs

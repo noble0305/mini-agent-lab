@@ -1,0 +1,1 @@
+"""S05: 最小 HTTP 服务入口，把 S01 ReAct 内核暴露为 /health 与 /chat。"""
